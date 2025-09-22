@@ -126,15 +126,34 @@ def sort_points(pts):
     return sorted_pts
 
 
-def extract_keypoints(keypoints, img):
-    pts = np.array(list(map(lambda kp: kp.pt, keypoints)), dtype=np.float32)
-    return pts
+def extract_keypoints(keypoints, depth_image=None):
+    print(depth_image.shape)
+    if depth_image is not None:
+        # Extract 3D points: (x, y, depth_value)
+        return np.array(
+            list(
+                map(
+                    lambda kp: [
+                        kp.pt[0],
+                        kp.pt[1],
+                        depth_image[int(kp.pt[1])][int(kp.pt[0])],
+                    ],
+                    keypoints,
+                )
+            ),
+            dtype=np.float32,
+        )
+
+    return np.array(list(map(lambda kp: kp.pt, keypoints)), dtype=np.float32)
 
 
 def cluster(pts, min_cluster_size=10, min_samples=2):
     clusterer = fast_hdbscan.HDBSCAN(min_cluster_size=min_cluster_size)
     clusterer.fit_predict(pts)
-    objects = {label: pts[np.where(clusterer.labels_ == label)] for label in np.unique(clusterer.labels_)}
+    objects = {
+        label: pts[np.where(clusterer.labels_ == label)]
+        for label in np.unique(clusterer.labels_)
+    }
     return objects
 
 
@@ -146,25 +165,35 @@ def process_image(
 ):
     h, w = img.shape[:2]
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    t_mask = underwater_mask_stuff(img_rgb / 255.0)
+    t_mask = to_gray(underwater_mask_stuff(img_rgb / 255.0) * 255)
 
-    # img_rgb[t_mask < np.percentile(t_mask, 10)] = np.mean(img_rgb, axis=(0, 1))
     if colormap is not None:
-        t_mask = cv2.applyColorMap((255 * (t_mask)).astype(np.uint8), colormap)
-    cv2.imshow("mask", t_mask)
+        t_mask_vis = cv2.applyColorMap((t_mask).astype(np.uint8), colormap)
+    else:
+        t_mask_vis = t_mask.copy()
+    cv2.imshow("mask", t_mask_vis)
     keypoints, _desc = detector.detectAndCompute(img, None)
-    pts = extract_keypoints(keypoints, img_rgb)
+    pts = extract_keypoints(keypoints, t_mask)
     four_pts = pts
     objects = cluster(pts, min_cluster_size=10, min_samples=2)
+    # color = {object: tuple(np.random.randint(0, 255, 3).tolist()) for object in objects}
+    colors = []
+    for i in range(20):
+        idx = int(i * 255 / 20)
+        color = colormap[idx]
+        colors.extend(color.tolist())
+    colors[1], colors[-1] = colors[-1], colors[1]
+    # colors[2], colors[-2] = colors[-2], colors[2]
+    colors[3], colors[-6] = colors[-6], colors[3]
 
-    # Always draw detected keypoints as red circles
     if four_pts is not None:
-        for object in objects:
-            color = tuple(np.random.randint(0, 255, 3).tolist())
-            print(color)
-            for pt in objects[object]:
+        for object_ in objects:
+            if object_ == -1:
+                continue
+            # print((ag+object*ag, ab+object*ab, ar+object*ar))
+            for pt in objects[object_]:
                 pt_int = tuple(np.round(pt).astype(int))
-                cv2.circle(img, pt_int, 5, color, -1)
+                cv2.circle(img, pt_int[:-1], 5, colors[object_], -1)
 
     if four_pts is None or len(four_pts) != 4:
         return img, None, None
